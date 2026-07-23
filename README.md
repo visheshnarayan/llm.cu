@@ -1,6 +1,6 @@
 # CUDA Inference + LoRA Fine-Tuning Engine
 
-A from-scratch, raw-CUDA inference engine and LoRA fine-tuning system for **Qwen3 1.7B**. All core kernels written in raw CUDA — no cuDNN/cuBLAS for the critical path.
+A from-scratch, raw-CUDA inference engine and LoRA fine-tuning system for Qwen3 1.7B. **All core kernels written in raw CUDA.**
 
 ## Architecture
 
