@@ -1,0 +1,38 @@
+# Build artifacts
+build/
+*.o
+*.so
+*.a
+*.exe
+
+# Model weights & data (too large for git)
+weights/
+models/
+data/
+*.bin
+*.safetensors
+*.gguf
+*.pt
+*.pth
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Benchmark outputs
+benchmarks/results/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Markdown files (except README)
+*.md
+!README.md
