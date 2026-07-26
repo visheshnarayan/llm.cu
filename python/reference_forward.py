@@ -30,33 +30,41 @@ def main():
     )
     model.eval()
 
+    # register hooks to capture intermediate activations
+    activations = {}
+
+    def make_hook(name):
+        def hook(module, input, output):
+            activations[name] = output
+        return hook
+
+    # hook embedding
+    model.model.embed_tokens.register_forward_hook(make_hook("embed_out"))
+
+    # hook each layer's input layernorm and full layer output
+    for i, layer in enumerate(model.model.layers):
+        layer.input_layernorm.register_forward_hook(make_hook(f"layer_{i:02d}_attn_norm"))
+        layer.register_forward_hook(make_hook(f"layer_{i:02d}_out"))
+
+    # hook final norm
+    model.model.norm.register_forward_hook(make_hook("final_norm"))
+
     with torch.no_grad():
-        # embeddings
-        hidden = model.model.embed_tokens(input_ids)
-        save("embed_out", hidden.squeeze(0))
-
-        # precompute rotary embeddings
-        seq_len = input_ids.shape[1]
-        position_ids = torch.arange(seq_len).unsqueeze(0)
-        rotary_emb = model.model.rotary_emb(hidden, position_ids)
-
-        # each transformer layer
-        for i, layer in enumerate(model.model.layers):
-            # attn norm
-            normed = layer.input_layernorm(hidden)
-            save(f"layer_{i:02d}_attn_norm", normed.squeeze(0))
-
-            # full layer forward
-            hidden = layer(hidden, position_embeddings=rotary_emb)[0]
-            save(f"layer_{i:02d}_out", hidden.squeeze(0))
-
-        # final norm 
-        hidden = model.model.norm(hidden)
-        save("final_norm", hidden.squeeze(0))
-
-        # logits (tied weights) 
-        logits = model.lm_head(hidden)
+        # run full forward pass (handles position embeddings internally)
+        outputs = model(input_ids)
+        logits = outputs.logits
         save("logits", logits.squeeze(0))
+
+        # save hooked activations
+        save("embed_out", activations["embed_out"].squeeze(0))
+        for i in range(len(model.model.layers)):
+            save(f"layer_{i:02d}_attn_norm", activations[f"layer_{i:02d}_attn_norm"].squeeze(0))
+            # layer output is a tuple (hidden_states, ...)
+            layer_out = activations[f"layer_{i:02d}_out"]
+            if isinstance(layer_out, tuple):
+                layer_out = layer_out[0]
+            save(f"layer_{i:02d}_out", layer_out.squeeze(0))
+        save("final_norm", activations["final_norm"].squeeze(0))
 
     print(f"\nDumped activations to {OUT_DIR}/")
 
