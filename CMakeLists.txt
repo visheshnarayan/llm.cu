@@ -12,4 +12,19 @@ endif()
 # include headers 
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
-# TODO:  add_executable and kernel sources 
+# kernel sources
+set(KERNEL_SOURCES
+    src/kernels/embed.cu
+    src/kernels/matmul.cu
+    src/kernels/rmsnorm.cu
+    src/kernels/rope.cu
+    src/kernels/softmax.cu
+    src/kernels/activation.cu
+    src/kernels/elementwise.cu
+    src/kernels/attention.cu
+    src/kernels/mlp.cu
+    src/kernels/forward.cu
+)
+
+# main executable
+add_executable(llm_engine src/main.cu ${KERNEL_SOURCES})

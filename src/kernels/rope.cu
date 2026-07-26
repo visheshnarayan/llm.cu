@@ -29,8 +29,8 @@ __global__ void rope_kernel(float* q, float* k, int seq_len, int num_q_heads, in
         float x0 = k[idx]; 
         float x1 = k[idx + 1];
         k[idx] = x0 * cos_val - x1 * sin_val; 
-        k[idx + 1] = x0 * sin_val + x1 * cos_val; 
-    
+        k[idx + 1] = x0 * sin_val + x1 * cos_val;
+    }
 }
 
 void rope_forward(float* q, float* k, int seq_len) {
