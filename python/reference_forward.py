@@ -26,7 +26,7 @@ def main():
     print(f"Input: {token_ids}")
 
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID, torch_dtype=torch.float32
+        MODEL_ID, dtype=torch.float32
     )
     model.eval()
 
@@ -35,14 +35,19 @@ def main():
         hidden = model.model.embed_tokens(input_ids)
         save("embed_out", hidden.squeeze(0))
 
-        # each transformer layer 
-        for i, layer in enumerate(model.model.layers): 
-            # attn norm 
+        # precompute rotary embeddings
+        seq_len = input_ids.shape[1]
+        position_ids = torch.arange(seq_len).unsqueeze(0)
+        rotary_emb = model.model.rotary_emb(hidden, position_ids)
+
+        # each transformer layer
+        for i, layer in enumerate(model.model.layers):
+            # attn norm
             normed = layer.input_layernorm(hidden)
             save(f"layer_{i:02d}_attn_norm", normed.squeeze(0))
 
             # full layer forward
-            hidden = layer(hidden)[0]
+            hidden = layer(hidden, position_embeddings=rotary_emb)[0]
             save(f"layer_{i:02d}_out", hidden.squeeze(0))
 
         # final norm 
