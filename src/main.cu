@@ -224,19 +224,13 @@ int main(int argc, char** argv) {
     alloc_workspace(&ws, num_tokens);
 
     // 5) run forward pass
+    system("mkdir -p data/cuda_out");
     printf("Running forward pass...\n");
     transformer_forward(dev_tokens, &model, &ws, num_tokens);
     CUDA_CHECK(cudaDeviceSynchronize());
     printf("Forward pass complete.\n");
 
-    // 6) save outputs for verification
-    system("mkdir -p data/cuda_out");
-
-    save_binary_f32("data/cuda_out/embed_out.bin",
-                    ws.hidden, (size_t)num_tokens * HIDDEN_SIZE);
-    save_binary_f32("data/cuda_out/logits.bin",
-                    ws.logits, (size_t)num_tokens * VOCAB_SIZE);
-
+    // 6) outputs saved by forward.cu debug_save
     printf("Outputs saved to data/cuda_out/\n");
 
     // 7) print top predicted token (last position)

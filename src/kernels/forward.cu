@@ -1,5 +1,16 @@
 #include "tensor.h"
 #include "config.h"
+#include <stdio.h>
+
+// debug: save gpu buffer to file
+void debug_save(const char* path, const float* dev_ptr, size_t elements) {
+    float* host = (float*)malloc(elements * sizeof(float));
+    CUDA_CHECK(cudaMemcpy(host, dev_ptr, elements * sizeof(float), cudaMemcpyDeviceToHost));
+    FILE* f = fopen(path, "wb");
+    fwrite(host, sizeof(float), elements, f);
+    fclose(f);
+    free(host);
+}
 
 // kernel forward declarations
 void embed_forward(const int* token_ids, const float* embed_table, float* out, int seq_len); 
@@ -74,8 +85,10 @@ void transformer_forward(
 
     // 1) embedding lookup
     embed_forward(token_ids, model->embed_table, ws->hidden, seq_len);
-    
+    debug_save("data/cuda_out/embed_out.bin", ws->hidden, (size_t)seq_len * HIDDEN_SIZE);
+
     // 2) transformer layers
+    char debug_path[256];
     for (int l = 0; l < NUM_LAYERS; l++) {
         const LayerWeights* lw = &model->layers[l]; 
 
@@ -88,6 +101,8 @@ void transformer_forward(
 
         // attention norm
         rmsnorm_forward(ws->hidden, lw->attn_norm, ws->norm_out, seq_len, HIDDEN_SIZE);
+        sprintf(debug_path, "data/cuda_out/layer_%02d_attn_norm.bin", l);
+        debug_save(debug_path, ws->norm_out, (size_t)seq_len * HIDDEN_SIZE);
 
         // self-attn 
         attention_forward(
@@ -116,13 +131,17 @@ void transformer_forward(
         mlp_forward(ws->norm_out, lw->w_gate, lw->w_up, lw->w_down, 
                     ws->attn_out, ws->gate_buf, ws->up_buf, seq_len);
         
-        // residual after MLP 
+        // residual after MLP
         residual_forward(ws->attn_out, ws->residual, ws->hidden, hidden_total);
+        sprintf(debug_path, "data/cuda_out/layer_%02d_out.bin", l);
+        debug_save(debug_path, ws->hidden, (size_t)seq_len * HIDDEN_SIZE);
     }
 
     // 3) final RMSNorm
     rmsnorm_forward(ws->hidden, model->final_norm, ws->hidden, seq_len, HIDDEN_SIZE);
+    debug_save("data/cuda_out/final_norm.bin", ws->hidden, (size_t)seq_len * HIDDEN_SIZE);
 
     // 4) logits: hidden @ lm_head^T
     matmul_forward(ws->hidden, model->lm_head, ws->logits, seq_len, VOCAB_SIZE, HIDDEN_SIZE);
+    debug_save("data/cuda_out/logits.bin", ws->logits, (size_t)seq_len * VOCAB_SIZE);
 }
