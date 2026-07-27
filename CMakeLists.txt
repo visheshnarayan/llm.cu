@@ -22,6 +22,7 @@ set(KERNEL_SOURCES
     src/kernels/activation.cu
     src/kernels/elementwise.cu
     src/kernels/attention.cu
+    src/kernels/flash_attention.cu
     src/kernels/mlp.cu
     src/kernels/forward.cu
 )

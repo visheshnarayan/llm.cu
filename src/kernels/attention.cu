@@ -4,11 +4,9 @@
 
 // forward declarations of kernels we call
 void matmul_forward(const float* A, const float* B, float* C, int M, int N, int K);
-void matmul_nn_forward(const float* A, const float* B, float* C, int M, int N, int K);
-void rmsnorm_forward(const float* x, const float* weight, float* out, int rows, int cols); 
-void rope_forward(float* q, float* k, int seq_len); 
-void softmax_forward(float* x, int rows, int cols); 
-void residual_forward(const float* x, const float* residual, float* out, int n); 
+void rmsnorm_forward(const float* x, const float* weight, float* out, int rows, int cols);
+void rope_forward(float* q, float* k, int seq_len);
+void flash_attention_forward(const float* Q, const float* K, const float* V, float* O, int seq_len); 
 
 // casual mask + scale: scors[i][j] = (j > i) ? -inf : scores[i][j] / sqrt(HEAD_DIM)
 __global__ void mask_scale_kernel(float* scores, int seq_len) {
@@ -70,7 +68,7 @@ void attention_forward(
     float* out,                     // [seq, HIDDEN_SIZE]
     float* q, float* k, float* v,   // workspace
     float* k_exp, float* v_exp,     // expanded KV
-    float* scores, float* attn_out, // workspace
+    float* attn_out,                // workspace [seq, NUM_HEADS * HEAD_DIM]
     float* q_head, float* k_head,   // per-head workspace [seq, HEAD_DIM] each
     float* v_head, float* o_head,   // per-head workspace [seq, HEAD_DIM] each
     int seq_len
@@ -99,10 +97,8 @@ void attention_forward(
     expand_kv_kernel<<<exp_grid, exp_block>>>(v, v_exp, seq_len);
     CUDA_CHECK_LAST();
 
-    // per-head attention: extract head -> Q@K^T -> mask+scale -> softmax -> scores@V -> scatter back
+    // per-head flash attention: extract head -> fused QK^T+mask+softmax+V -> scatter back
     for (int h = 0; h < NUM_HEADS; h++) {
-        float* s_h = scores + h * seq_len * seq_len;
-
         // extract this head's q, k, v into contiguous [seq, HEAD_DIM] buffers
         extract_head_kernel<<<seq_len, HEAD_DIM>>>(q, q_head, seq_len, NUM_HEADS, h);
         CUDA_CHECK_LAST();
@@ -111,19 +107,8 @@ void attention_forward(
         extract_head_kernel<<<seq_len, HEAD_DIM>>>(v_exp, v_head, seq_len, NUM_HEADS, h);
         CUDA_CHECK_LAST();
 
-        // scores[seq,seq] = Q_h[seq,HEAD_DIM] @ K_h^T[HEAD_DIM,seq]
-        matmul_forward(q_head, k_head, s_h, seq_len, seq_len, HEAD_DIM);
-
-        // causal mask + scale
-        mask_scale_kernel<<<seq_len, 256>>>(s_h, seq_len);
-        CUDA_CHECK_LAST();
-
-        // softmax each row
-        softmax_forward(s_h, seq_len, seq_len);
-
-        // o_head[seq, HEAD_DIM] = scores[seq, seq] @ V_h[seq, HEAD_DIM]
-        // V is an activation not a weight, so use non-transposing matmul
-        matmul_nn_forward(s_h, v_head, o_head, seq_len, HEAD_DIM, seq_len);
+        // fused attention: o_head = softmax(Q@K^T / sqrt(d) + mask) @ V
+        flash_attention_forward(q_head, k_head, v_head, o_head, seq_len);
 
         // scatter back into interleaved attn_out
         scatter_head_kernel<<<seq_len, HEAD_DIM>>>(o_head, attn_out, seq_len, NUM_HEADS, h);

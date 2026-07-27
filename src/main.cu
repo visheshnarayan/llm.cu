@@ -36,7 +36,6 @@ typedef struct {
     float* v;               // [seq, NUM_KV_HEADS * HEAD_DIM]
     float* k_exp;           // [seq, NUM_HEADS * HEAD_DIM]
     float* v_exp;           // [seq, NUM_HEADS * HEAD_DIM]
-    float* scores;          // [NUM_HEADS, seq, seq]
     float* attn_work;       // [seq, NUM_HEADS * HEAD_DIM]
     float* q_head;          // [seq, HEAD_DIM] :: per-head workspace
     float* k_head;          // [seq, HEAD_DIM]
@@ -170,7 +169,6 @@ void alloc_workspace(Workspace* ws, int seq_len) {
     CUDA_CHECK(cudaMalloc(&ws->v,         S * KVD * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&ws->k_exp,     S * QD * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&ws->v_exp,     S * QD * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&ws->scores,    (size_t)NUM_HEADS * S * S * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&ws->attn_work, S * QD * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&ws->q_head,   S * HEAD_DIM * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&ws->k_head,   S * HEAD_DIM * sizeof(float)));
@@ -188,8 +186,7 @@ void free_workspace(Workspace* ws) {
     cudaFree(ws->norm_out);  cudaFree(ws->attn_out);
     cudaFree(ws->q);         cudaFree(ws->k);
     cudaFree(ws->v);         cudaFree(ws->k_exp);
-    cudaFree(ws->v_exp);     cudaFree(ws->scores);
-    cudaFree(ws->attn_work); cudaFree(ws->q_head);
+    cudaFree(ws->v_exp);     cudaFree(ws->attn_work); cudaFree(ws->q_head);
     cudaFree(ws->k_head);    cudaFree(ws->v_head);
     cudaFree(ws->o_head);    cudaFree(ws->gate_buf);
     cudaFree(ws->up_buf);    cudaFree(ws->logits);

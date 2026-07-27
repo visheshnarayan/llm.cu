@@ -19,7 +19,7 @@ void attention_forward(
     const float* hidden, const float* wq, const float* wk, const float* wv, const float* wo,
     const float* q_norm_weight, const float* k_norm_weight,
     float* out, float* q, float* k, float* v, float* k_exp, float* v_exp,
-    float* scores, float* attn_out,
+    float* attn_out,
     float* q_head, float* k_head, float* v_head, float* o_head,
     int seq_len
 );
@@ -64,7 +64,6 @@ typedef struct {
     float* v;               // [seq, NUM_KV_HEADS * HEAD_DIM]
     float* k_exp;           // [seq, NUM_HEADS * HEAD_DIM]
     float* v_exp;           // [seq, NUM_HEADS * HEAD_DIM]
-    float* scores;          // [NUM_HEADS, seq, seq]
     float* attn_work;       // [seq, NUM_HEADS * HEAD_DIM]
     float* q_head;          // [seq, HEAD_DIM] :: per-head workspace
     float* k_head;          // [seq, HEAD_DIM]
@@ -109,7 +108,7 @@ void transformer_forward(
             ws->norm_out, lw->wq, lw->wk, lw->wv, lw->wo,
             lw->q_norm, lw->k_norm,
             ws->attn_out, ws->q, ws->k, ws->v, ws->k_exp, ws->v_exp,
-            ws->scores, ws->attn_work,
+            ws->attn_work,
             ws->q_head, ws->k_head, ws->v_head, ws->o_head,
             seq_len
         );
