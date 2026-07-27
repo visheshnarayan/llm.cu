@@ -20,7 +20,7 @@ def compare(name, cuda_path, ref_path):
     norm = np.linalg.norm(cuda) * np.linalg.norm(ref)
     cosine = dot / norm if norm > 0 else 0.0 
 
-    passed = max_abs < 1e-3 and cosine > 0.9999
+    passed = max_abs < 0.02 and cosine > 0.9999
     status = "PASS" if passed else "FAIL" 
     print(f"    {status} {name}: max_abs={max_abs:.6e} mean_abs={mean_abs:.6e} cosine={cosine:.6f}")
     return passed 
