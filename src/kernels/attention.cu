@@ -3,7 +3,8 @@
 #include <math.h> 
 
 // forward declarations of kernels we call
-void matmul_forward(const float* A, const float* B, float* C, int M, int N, int K); 
+void matmul_forward(const float* A, const float* B, float* C, int M, int N, int K);
+void matmul_nn_forward(const float* A, const float* B, float* C, int M, int N, int K);
 void rmsnorm_forward(const float* x, const float* weight, float* out, int rows, int cols); 
 void rope_forward(float* q, float* k, int seq_len); 
 void softmax_forward(float* x, int rows, int cols); 
@@ -121,7 +122,8 @@ void attention_forward(
         softmax_forward(s_h, seq_len, seq_len);
 
         // o_head[seq, HEAD_DIM] = scores[seq, seq] @ V_h[seq, HEAD_DIM]
-        matmul_forward(s_h, v_head, o_head, seq_len, HEAD_DIM, seq_len);
+        // V is an activation not a weight, so use non-transposing matmul
+        matmul_nn_forward(s_h, v_head, o_head, seq_len, HEAD_DIM, seq_len);
 
         // scatter back into interleaved attn_out
         scatter_head_kernel<<<seq_len, HEAD_DIM>>>(o_head, attn_out, seq_len, NUM_HEADS, h);
