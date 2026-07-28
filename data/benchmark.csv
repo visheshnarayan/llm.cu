@@ -1,0 +1,10 @@
+kernel,time_ms,gflops
+embed,0.0153,
+attn_norm (28 layers),0.3746,
+attention (28 layers),44.3093,
+ffn_norm (28 layers),0.3758,
+mlp (28 layers),35.7220,
+residual (28 layers),0.4968,
+final_norm,0.0137,
+lm_head,6.5839,
+total_forward,91.1144,
