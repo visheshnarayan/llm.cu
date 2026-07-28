@@ -30,3 +30,8 @@ set(KERNEL_SOURCES
 
 # main executable
 add_executable(llm_engine src/main.cu ${KERNEL_SOURCES})
+
+# wmma needs explicit arch flag
+set_source_files_properties(src/kernels/matmul_wmma.cu PROPERTIES
+    COMPILE_FLAGS "--generate-code=arch=compute_80,code=sm_80"
+)
