@@ -1,6 +1,7 @@
 #include "tensor.h"
 #include "config.h"
 #include <stdio.h>
+#include <string.h>
 
 // debug: save gpu buffer to file
 void debug_save(const char* path, const float* dev_ptr, size_t elements) {
@@ -143,4 +144,135 @@ void transformer_forward(
     // 4) logits: hidden @ lm_head^T
     matmul_forward(ws->hidden, model->lm_head, ws->logits, seq_len, VOCAB_SIZE, HIDDEN_SIZE);
     debug_save("data/cuda_out/logits.bin", ws->logits, (size_t)seq_len * VOCAB_SIZE);
+}
+
+// timed forward pass for benchmarking (no debug saves)
+void transformer_forward_bench(
+    const int* token_ids,
+    const ModelWeights* model,
+    Workspace* ws,
+    int seq_len,
+    FILE* csv
+) {
+    int hidden_total = seq_len * HIDDEN_SIZE;
+    cudaEvent_t t0, t1;
+    float ms;
+    CUDA_CHECK(cudaEventCreate(&t0));
+    CUDA_CHECK(cudaEventCreate(&t1));
+
+    // total forward
+    cudaEvent_t fwd_start, fwd_end;
+    CUDA_CHECK(cudaEventCreate(&fwd_start));
+    CUDA_CHECK(cudaEventCreate(&fwd_end));
+    CUDA_CHECK(cudaEventRecord(fwd_start));
+
+    // embedding
+    CUDA_CHECK(cudaEventRecord(t0));
+    embed_forward(token_ids, model->embed_table, ws->hidden, seq_len);
+    CUDA_CHECK(cudaEventRecord(t1));
+    CUDA_CHECK(cudaEventSynchronize(t1));
+    CUDA_CHECK(cudaEventElapsedTime(&ms, t0, t1));
+    fprintf(csv, "embed,%.4f,\n", ms);
+
+    // accumulate per-component times across all layers
+    float total_attn_norm = 0, total_attn = 0, total_ffn_norm = 0, total_mlp = 0, total_residual = 0;
+
+    for (int l = 0; l < NUM_LAYERS; l++) {
+        const LayerWeights* lw = &model->layers[l];
+
+        CUDA_CHECK(cudaMemcpy(ws->residual, ws->hidden,
+                    hidden_total * sizeof(float), cudaMemcpyDeviceToDevice));
+
+        // attn norm
+        CUDA_CHECK(cudaEventRecord(t0));
+        rmsnorm_forward(ws->hidden, lw->attn_norm, ws->norm_out, seq_len, HIDDEN_SIZE);
+        CUDA_CHECK(cudaEventRecord(t1));
+        CUDA_CHECK(cudaEventSynchronize(t1));
+        CUDA_CHECK(cudaEventElapsedTime(&ms, t0, t1));
+        total_attn_norm += ms;
+
+        // attention
+        CUDA_CHECK(cudaEventRecord(t0));
+        attention_forward(
+            ws->norm_out, lw->wq, lw->wk, lw->wv, lw->wo,
+            lw->q_norm, lw->k_norm,
+            ws->attn_out, ws->q, ws->k, ws->v, ws->k_exp, ws->v_exp,
+            ws->attn_work,
+            ws->q_head, ws->k_head, ws->v_head, ws->o_head,
+            seq_len
+        );
+        CUDA_CHECK(cudaEventRecord(t1));
+        CUDA_CHECK(cudaEventSynchronize(t1));
+        CUDA_CHECK(cudaEventElapsedTime(&ms, t0, t1));
+        total_attn += ms;
+
+        // residual
+        CUDA_CHECK(cudaEventRecord(t0));
+        residual_forward(ws->attn_out, ws->residual, ws->hidden, hidden_total);
+        CUDA_CHECK(cudaEventRecord(t1));
+        CUDA_CHECK(cudaEventSynchronize(t1));
+        CUDA_CHECK(cudaEventElapsedTime(&ms, t0, t1));
+        total_residual += ms;
+
+        CUDA_CHECK(cudaMemcpy(ws->residual, ws->hidden,
+                    hidden_total * sizeof(float), cudaMemcpyDeviceToDevice));
+
+        // ffn norm
+        CUDA_CHECK(cudaEventRecord(t0));
+        rmsnorm_forward(ws->hidden, lw->ffn_norm, ws->norm_out, seq_len, HIDDEN_SIZE);
+        CUDA_CHECK(cudaEventRecord(t1));
+        CUDA_CHECK(cudaEventSynchronize(t1));
+        CUDA_CHECK(cudaEventElapsedTime(&ms, t0, t1));
+        total_ffn_norm += ms;
+
+        // mlp
+        CUDA_CHECK(cudaEventRecord(t0));
+        mlp_forward(ws->norm_out, lw->w_gate, lw->w_up, lw->w_down,
+                    ws->attn_out, ws->gate_buf, ws->up_buf, seq_len);
+        CUDA_CHECK(cudaEventRecord(t1));
+        CUDA_CHECK(cudaEventSynchronize(t1));
+        CUDA_CHECK(cudaEventElapsedTime(&ms, t0, t1));
+        total_mlp += ms;
+
+        // residual
+        CUDA_CHECK(cudaEventRecord(t0));
+        residual_forward(ws->attn_out, ws->residual, ws->hidden, hidden_total);
+        CUDA_CHECK(cudaEventRecord(t1));
+        CUDA_CHECK(cudaEventSynchronize(t1));
+        CUDA_CHECK(cudaEventElapsedTime(&ms, t0, t1));
+        total_residual += ms;
+    }
+
+    fprintf(csv, "attn_norm (28 layers),%.4f,\n", total_attn_norm);
+    fprintf(csv, "attention (28 layers),%.4f,\n", total_attn);
+    fprintf(csv, "ffn_norm (28 layers),%.4f,\n", total_ffn_norm);
+    fprintf(csv, "mlp (28 layers),%.4f,\n", total_mlp);
+    fprintf(csv, "residual (28 layers),%.4f,\n", total_residual);
+
+    // final norm
+    CUDA_CHECK(cudaEventRecord(t0));
+    rmsnorm_forward(ws->hidden, model->final_norm, ws->hidden, seq_len, HIDDEN_SIZE);
+    CUDA_CHECK(cudaEventRecord(t1));
+    CUDA_CHECK(cudaEventSynchronize(t1));
+    CUDA_CHECK(cudaEventElapsedTime(&ms, t0, t1));
+    fprintf(csv, "final_norm,%.4f,\n", ms);
+
+    // logits
+    CUDA_CHECK(cudaEventRecord(t0));
+    matmul_forward(ws->hidden, model->lm_head, ws->logits, seq_len, VOCAB_SIZE, HIDDEN_SIZE);
+    CUDA_CHECK(cudaEventRecord(t1));
+    CUDA_CHECK(cudaEventSynchronize(t1));
+    CUDA_CHECK(cudaEventElapsedTime(&ms, t0, t1));
+    fprintf(csv, "lm_head,%.4f,\n", ms);
+
+    // total
+    CUDA_CHECK(cudaEventRecord(fwd_end));
+    CUDA_CHECK(cudaEventSynchronize(fwd_end));
+    CUDA_CHECK(cudaEventElapsedTime(&ms, fwd_start, fwd_end));
+    fprintf(csv, "total_forward,%.4f,\n", ms);
+
+    CUDA_CHECK(cudaEventDestroy(t0));
+    CUDA_CHECK(cudaEventDestroy(t1));
+    CUDA_CHECK(cudaEventDestroy(fwd_start));
+    CUDA_CHECK(cudaEventDestroy(fwd_end));
 }

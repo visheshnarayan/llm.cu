@@ -16,6 +16,7 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 set(KERNEL_SOURCES
     src/kernels/embed.cu
     src/kernels/matmul.cu
+    src/kernels/matmul_wmma.cu
     src/kernels/rmsnorm.cu
     src/kernels/rope.cu
     src/kernels/softmax.cu

@@ -48,6 +48,8 @@ typedef struct {
 
 void transformer_forward(const int* token_ids, const ModelWeights* model,
                           Workspace* ws, int seq_len);
+void transformer_forward_bench(const int* token_ids, const ModelWeights* model,
+                                Workspace* ws, int seq_len, FILE* csv);
 
 // load binary file into cpu buffer
 float* load_binary_f32(const char* path, size_t expected_elements) {
@@ -220,15 +222,34 @@ int main(int argc, char** argv) {
     Workspace ws;
     alloc_workspace(&ws, num_tokens);
 
-    // 5) run forward pass
-    system("mkdir -p data/cuda_out");
-    printf("Running forward pass...\n");
-    transformer_forward(dev_tokens, &model, &ws, num_tokens);
-    CUDA_CHECK(cudaDeviceSynchronize());
-    printf("Forward pass complete.\n");
+    // 5) check for --bench flag
+    int bench_mode = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--bench") == 0) bench_mode = 1;
+    }
 
-    // 6) outputs saved by forward.cu debug_save
-    printf("Outputs saved to data/cuda_out/\n");
+    system("mkdir -p data/cuda_out");
+
+    if (bench_mode) {
+        // warmup run
+        printf("Warmup run...\n");
+        transformer_forward(dev_tokens, &model, &ws, num_tokens);
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        // timed run
+        printf("Benchmark run...\n");
+        FILE* csv = fopen("data/benchmark.csv", "w");
+        fprintf(csv, "kernel,time_ms,gflops\n");
+        transformer_forward_bench(dev_tokens, &model, &ws, num_tokens, csv);
+        fclose(csv);
+        printf("Benchmark saved to data/benchmark.csv\n");
+    } else {
+        printf("Running forward pass...\n");
+        transformer_forward(dev_tokens, &model, &ws, num_tokens);
+        CUDA_CHECK(cudaDeviceSynchronize());
+        printf("Forward pass complete.\n");
+        printf("Outputs saved to data/cuda_out/\n");
+    }
 
     // 7) print top predicted token (last position)
     float* host_logits = (float*)malloc((size_t)VOCAB_SIZE * sizeof(float));
