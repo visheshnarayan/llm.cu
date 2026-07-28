@@ -17,7 +17,7 @@ void debug_save(const char* path, const float* dev_ptr, size_t elements) {
 void embed_forward(const int* token_ids, const float* embed_table, float* out, int seq_len); 
 void rmsnorm_forward(const float* x, const float* weight, float* out, int rows, int cols); 
 void attention_forward(
-    const float* hidden, const float* wq, const float* wk, const float* wv, const float* wo,
+    const float* hidden, const half* wq_h, const half* wk_h, const half* wv_h, const half* wo_h,
     const float* q_norm_weight, const float* k_norm_weight,
     float* out, float* q, float* k, float* v, float* k_exp, float* v_exp,
     float* attn_out,
@@ -25,12 +25,13 @@ void attention_forward(
     int seq_len
 );
 void mlp_forward(
-    const float* hidden, const float* w_gate, const float* w_up, const float* w_down, 
+    const float* hidden, const half* w_gate_h, const half* w_up_h, const half* w_down_h,
     float* out, float* gate_buf, float* up_buf, int seq_len
 );
 void residual_forward(const float* x, const float* residual, float* out, int n);
 void matmul_forward(const float* A, const float* B, float* C, int M, int N, int K);
-void matmul_wmma_forward(const float* A, const float* B, float* C, int M, int N, int K); 
+void matmul_wmma_forward(const float* A, const half* B_half, float* C, int M, int N, int K);
+void convert_fp32_to_fp16(const float* d_fp32, half* d_fp16, size_t n);
 
 // per layer weights (pointers into gpu memory)
 typedef struct {
@@ -45,6 +46,14 @@ typedef struct {
     float* w_gate;          // [INTERMEDIATE_SIZE, HIDDEN_SIZE]
     float* w_up;            // [INTERMEDIATE_SIZE, HIDDEN_SIZE]
     float* w_down;          // [HIDDEN_SIZE, INTERMEDIATE_SIZE]
+    // fp16 copies for tensor cores
+    half* wq_h;
+    half* wk_h;
+    half* wv_h;
+    half* wo_h;
+    half* w_gate_h;
+    half* w_up_h;
+    half* w_down_h;
 } LayerWeights;
 
 // all model weights
@@ -53,6 +62,7 @@ typedef struct {
     LayerWeights layers[NUM_LAYERS];
     float* final_norm;                  // [HIDDEN_SIZE]
     float* lm_head;                     // [VOCAB_SIZE, HIDDEN_SIZE]
+    half* lm_head_h;                    // fp16 copy
 } ModelWeights;
 
 // workspace buffers (pre-allocated, reused across layers)
@@ -107,7 +117,7 @@ void transformer_forward(
 
         // self-attn 
         attention_forward(
-            ws->norm_out, lw->wq, lw->wk, lw->wv, lw->wo,
+            ws->norm_out, lw->wq_h, lw->wk_h, lw->wv_h, lw->wo_h,
             lw->q_norm, lw->k_norm,
             ws->attn_out, ws->q, ws->k, ws->v, ws->k_exp, ws->v_exp,
             ws->attn_work,
@@ -129,7 +139,7 @@ void transformer_forward(
         rmsnorm_forward(ws->hidden, lw->ffn_norm, ws->norm_out, seq_len, HIDDEN_SIZE);
 
         // MLP (SwiGLU)
-        mlp_forward(ws->norm_out, lw->w_gate, lw->w_up, lw->w_down, 
+        mlp_forward(ws->norm_out, lw->w_gate_h, lw->w_up_h, lw->w_down_h,
                     ws->attn_out, ws->gate_buf, ws->up_buf, seq_len);
         
         // residual after MLP
@@ -143,7 +153,7 @@ void transformer_forward(
     debug_save("data/cuda_out/final_norm.bin", ws->hidden, (size_t)seq_len * HIDDEN_SIZE);
 
     // 4) logits: hidden @ lm_head^T
-    matmul_wmma_forward(ws->hidden, model->lm_head, ws->logits, seq_len, VOCAB_SIZE, HIDDEN_SIZE);
+    matmul_wmma_forward(ws->hidden, model->lm_head_h, ws->logits, seq_len, VOCAB_SIZE, HIDDEN_SIZE);
     debug_save("data/cuda_out/logits.bin", ws->logits, (size_t)seq_len * VOCAB_SIZE);
 }
 
@@ -195,7 +205,7 @@ void transformer_forward_bench(
         // attention
         CUDA_CHECK(cudaEventRecord(t0));
         attention_forward(
-            ws->norm_out, lw->wq, lw->wk, lw->wv, lw->wo,
+            ws->norm_out, lw->wq_h, lw->wk_h, lw->wv_h, lw->wo_h,
             lw->q_norm, lw->k_norm,
             ws->attn_out, ws->q, ws->k, ws->v, ws->k_exp, ws->v_exp,
             ws->attn_work,
@@ -260,7 +270,7 @@ void transformer_forward_bench(
 
     // logits
     CUDA_CHECK(cudaEventRecord(t0));
-    matmul_wmma_forward(ws->hidden, model->lm_head, ws->logits, seq_len, VOCAB_SIZE, HIDDEN_SIZE);
+    matmul_wmma_forward(ws->hidden, model->lm_head_h, ws->logits, seq_len, VOCAB_SIZE, HIDDEN_SIZE);
     CUDA_CHECK(cudaEventRecord(t1));
     CUDA_CHECK(cudaEventSynchronize(t1));
     CUDA_CHECK(cudaEventElapsedTime(&ms, t0, t1));

@@ -1,8 +1,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <cuda_fp16.h>
 #include "tensor.h"
 #include "config.h"
+
+void convert_fp32_to_fp16(const float* d_fp32, half* d_fp16, size_t n);
+
+// helper: allocate fp16 buffer, convert fp32 weights, return fp16 pointer
+half* make_fp16_copy(float* d_fp32, size_t elements) {
+    half* d_fp16;
+    CUDA_CHECK(cudaMalloc(&d_fp16, elements * sizeof(half)));
+    convert_fp32_to_fp16(d_fp32, d_fp16, elements);
+    return d_fp16;
+}
 
 // from forward.cu
 typedef struct {
@@ -17,6 +28,14 @@ typedef struct {
     float* w_gate;          // [INTERMEDIATE_SIZE, HIDDEN_SIZE]
     float* w_up;            // [INTERMEDIATE_SIZE, HIDDEN_SIZE]
     float* w_down;          // [HIDDEN_SIZE, INTERMEDIATE_SIZE]
+    // fp16 copies for tensor cores
+    half* wq_h;
+    half* wk_h;
+    half* wv_h;
+    half* wo_h;
+    half* w_gate_h;
+    half* w_up_h;
+    half* w_down_h;
 } LayerWeights;
 
 typedef struct {
@@ -24,6 +43,7 @@ typedef struct {
     LayerWeights layers[NUM_LAYERS];
     float* final_norm;                  // [HIDDEN_SIZE]
     float* lm_head;                     // [VOCAB_SIZE, HIDDEN_SIZE]
+    half* lm_head_h;
 } ModelWeights;
 
 typedef struct {
@@ -141,6 +161,15 @@ void load_model_weights(ModelWeights* model) {
         sprintf(path, "weights/model.layers.%d.mlp.down_proj.weight.bin", l);
         lw->w_down = load_weight(path, (size_t)HIDDEN_SIZE * INTERMEDIATE_SIZE);
 
+        // convert projection weights to fp16 for tensor cores
+        lw->wq_h = make_fp16_copy(lw->wq, (size_t)NUM_HEADS * HEAD_DIM * HIDDEN_SIZE);
+        lw->wk_h = make_fp16_copy(lw->wk, (size_t)NUM_KV_HEADS * HEAD_DIM * HIDDEN_SIZE);
+        lw->wv_h = make_fp16_copy(lw->wv, (size_t)NUM_KV_HEADS * HEAD_DIM * HIDDEN_SIZE);
+        lw->wo_h = make_fp16_copy(lw->wo, (size_t)HIDDEN_SIZE * NUM_HEADS * HEAD_DIM);
+        lw->w_gate_h = make_fp16_copy(lw->w_gate, (size_t)INTERMEDIATE_SIZE * HIDDEN_SIZE);
+        lw->w_up_h = make_fp16_copy(lw->w_up, (size_t)INTERMEDIATE_SIZE * HIDDEN_SIZE);
+        lw->w_down_h = make_fp16_copy(lw->w_down, (size_t)HIDDEN_SIZE * INTERMEDIATE_SIZE);
+
         printf("  layer %d loaded\n", l);
     }
 
@@ -150,6 +179,7 @@ void load_model_weights(ModelWeights* model) {
     // lm_head (separate, not tied to embed)
     model->lm_head = load_weight("weights/lm_head.weight.bin",
                                   (size_t)VOCAB_SIZE * HIDDEN_SIZE);
+    model->lm_head_h = make_fp16_copy(model->lm_head, (size_t)VOCAB_SIZE * HIDDEN_SIZE);
 
     printf("All weights loaded.\n");
 }

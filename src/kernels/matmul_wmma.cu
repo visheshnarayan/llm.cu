@@ -9,17 +9,33 @@ using namespace nvcuda;
 #define WMMA_N 16
 #define WMMA_K 16
 
-// block: 2x2 warp tiles = 32x32 output, 4 warps = 128 threads
 #define WARPS_M 2
 #define WARPS_N 2
 #define BLOCK_M (WARPS_M * WMMA_M)
 #define BLOCK_N (WARPS_N * WMMA_N)
 
+// convert fp32 buffer to fp16 on GPU (one-time weight conversion)
+__global__ void fp32_to_fp16_kernel(const float* in, half* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        out[i] = __float2half(in[i]);
+    }
+}
+
+void convert_fp32_to_fp16(const float* d_fp32, half* d_fp16, size_t n) {
+    int block = 256;
+    int grid = (n + block - 1) / block;
+    fp32_to_fp16_kernel<<<grid, block>>>(d_fp32, d_fp16, n);
+    CUDA_CHECK_LAST();
+}
+
 // C[M,N] = A[M,K] @ B^T[N,K] using tensor cores
-// fp32 in, fp16 compute, fp32 accumulate
+// A is fp32 (activations, converted on the fly — small)
+// B is fp16 (weights, pre-converted — no overhead)
+// accumulation in fp32
 __global__ void matmul_wmma_kernel(
     const float* __restrict__ A,
-    const float* __restrict__ B,
+    const half* __restrict__ B_half,
     float* __restrict__ C,
     int M, int N, int K
 ) {
@@ -30,20 +46,20 @@ __global__ void matmul_wmma_kernel(
     int tile_row = blockIdx.y * BLOCK_M + warp_row * WMMA_M;
     int tile_col = blockIdx.x * BLOCK_N + warp_col * WMMA_N;
 
-    // all warps participate in loads/syncs, only active ones store results
     int warp_active = (tile_row < M && tile_col < N);
 
     wmma::fragment<wmma::accumulator, WMMA_M, WMMA_N, WMMA_K, float> acc;
     wmma::fill_fragment(acc, 0.0f);
 
+    // only A needs conversion (small: BLOCK_M rows)
+    // B is already fp16
     __shared__ half a_smem[BLOCK_M][WMMA_K];
-    __shared__ half b_smem[BLOCK_N][WMMA_K];
 
     int tid = threadIdx.x;
     int num_threads = blockDim.x;
 
     for (int kk = 0; kk < K; kk += WMMA_K) {
-        // cooperative fp32->fp16 load for A [M,K]
+        // convert A tile fp32->fp16 (activations, small)
         for (int i = tid; i < BLOCK_M * WMMA_K; i += num_threads) {
             int r = i / WMMA_K;
             int c = i % WMMA_K;
@@ -52,26 +68,19 @@ __global__ void matmul_wmma_kernel(
             float val = (gr < M && gc < K) ? A[gr * K + gc] : 0.0f;
             a_smem[r][c] = __float2half(val);
         }
-
-        // cooperative fp32->fp16 load for B [N,K]
-        for (int i = tid; i < BLOCK_N * WMMA_K; i += num_threads) {
-            int r = i / WMMA_K;
-            int c = i % WMMA_K;
-            int gr = blockIdx.x * BLOCK_N + r;
-            int gc = kk + c;
-            float val = (gr < N && gc < K) ? B[gr * K + gc] : 0.0f;
-            b_smem[r][c] = __float2half(val);
-        }
         __syncthreads();
 
-        // all warps compute (inactive ones produce zeros, discarded later)
+        // load A from shared, B directly from global (already fp16)
         wmma::fragment<wmma::matrix_a, WMMA_M, WMMA_N, WMMA_K, half, wmma::row_major> a_frag;
         wmma::fragment<wmma::matrix_b, WMMA_M, WMMA_N, WMMA_K, half, wmma::col_major> b_frag;
 
         wmma::load_matrix_sync(a_frag, &a_smem[warp_row * WMMA_M][0], WMMA_K);
-        wmma::load_matrix_sync(b_frag, &b_smem[warp_col * WMMA_N][0], WMMA_K);
-        wmma::mma_sync(acc, a_frag, b_frag, acc);
 
+        // B_half is [N,K] row-major, load as col_major for transpose
+        int b_row = blockIdx.x * BLOCK_N + warp_col * WMMA_N;
+        wmma::load_matrix_sync(b_frag, &B_half[b_row * K + kk], K);
+
+        wmma::mma_sync(acc, a_frag, b_frag, acc);
         __syncthreads();
     }
 
@@ -81,7 +90,6 @@ __global__ void matmul_wmma_kernel(
                             acc, BLOCK_N, wmma::mem_row_major);
     __syncthreads();
 
-    // only active warps write to global
     if (warp_active) {
         int lane = tid % 32;
         for (int i = lane; i < WMMA_M * WMMA_N; i += 32) {
@@ -96,10 +104,11 @@ __global__ void matmul_wmma_kernel(
     }
 }
 
-void matmul_wmma_forward(const float* A, const float* B, float* C,
+// public API: takes fp32 A and pre-converted fp16 B
+void matmul_wmma_forward(const float* A, const half* B_half, float* C,
 int M, int N, int K) {
     dim3 grid(CEIL_DIV(N, BLOCK_N), CEIL_DIV(M, BLOCK_M));
     dim3 block(WARPS_M * WARPS_N * 32);
-    matmul_wmma_kernel<<<grid, block>>>(A, B, C, M, N, K);
+    matmul_wmma_kernel<<<grid, block>>>(A, B_half, C, M, N, K);
     CUDA_CHECK_LAST();
 }

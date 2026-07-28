@@ -4,7 +4,7 @@
 
 // forward declarations of kernels we call
 void matmul_forward(const float* A, const float* B, float* C, int M, int N, int K);
-void matmul_wmma_forward(const float* A, const float* B, float* C, int M, int N, int K);
+void matmul_wmma_forward(const float* A, const half* B_half, float* C, int M, int N, int K);
 void rmsnorm_forward(const float* x, const float* weight, float* out, int rows, int cols);
 void rope_forward(float* q, float* k, int seq_len);
 void flash_attention_forward(const float* Q, const float* K, const float* V, float* O, int seq_len); 
@@ -60,10 +60,10 @@ __global__ void scatter_head_kernel(const float* in, float* out, int seq_len, in
 
 void attention_forward(
     const float* hidden,            // [seq, HIDDEN_SIZE]
-    const float* wq,                // [NUM_HEADS * HEAD_DIM, HIDDEN_SIZE]
-    const float* wk,                // [NUM_KV_HEADS * HEAD_DIM, HIDDEN_SIZE]
-    const float* wv,                // [NUM_KV_HEADS * HEAD_DIM, HIDDEN_SIZE]
-    const float* wo,                // [HIDDEN_SIZE, NUM_HEADS * HEAD_DIM]
+    const half* wq_h,               // [NUM_HEADS * HEAD_DIM, HIDDEN_SIZE] fp16
+    const half* wk_h,               // [NUM_KV_HEADS * HEAD_DIM, HIDDEN_SIZE] fp16
+    const half* wv_h,               // [NUM_KV_HEADS * HEAD_DIM, HIDDEN_SIZE] fp16
+    const half* wo_h,               // [HIDDEN_SIZE, NUM_HEADS * HEAD_DIM] fp16
     const float* q_norm_weight,     // [HEAD_DIM]
     const float* k_norm_weight,     // [HEAD_DIM]
     float* out,                     // [seq, HIDDEN_SIZE]
@@ -74,13 +74,13 @@ void attention_forward(
     float* v_head, float* o_head,   // per-head workspace [seq, HEAD_DIM] each
     int seq_len
 ) {
-    int q_dim = NUM_HEADS * HEAD_DIM; 
+    int q_dim = NUM_HEADS * HEAD_DIM;
     int kv_dim = NUM_KV_HEADS * HEAD_DIM;
 
-    // q, k, v projections (tensor cores)
-    matmul_wmma_forward(hidden, wq, q, seq_len, q_dim, HIDDEN_SIZE);
-    matmul_wmma_forward(hidden, wk, k, seq_len, kv_dim, HIDDEN_SIZE);
-    matmul_wmma_forward(hidden, wv, v, seq_len, kv_dim, HIDDEN_SIZE);
+    // q, k, v projections (tensor cores, fp16 weights)
+    matmul_wmma_forward(hidden, wq_h, q, seq_len, q_dim, HIDDEN_SIZE);
+    matmul_wmma_forward(hidden, wk_h, k, seq_len, kv_dim, HIDDEN_SIZE);
+    matmul_wmma_forward(hidden, wv_h, v, seq_len, kv_dim, HIDDEN_SIZE);
 
     // QK-norm (per head RMSNorm)
     rmsnorm_forward(q, q_norm_weight, q, seq_len * NUM_HEADS, HEAD_DIM); 
@@ -117,5 +117,5 @@ void attention_forward(
     }
 
     // output projection: out[seq, HIDDEN_SIZE] = attn_out[seq, q_dim] @ Wo^T
-    matmul_wmma_forward(attn_out, wo, out, seq_len, HIDDEN_SIZE, q_dim); 
+    matmul_wmma_forward(attn_out, wo_h, out, seq_len, HIDDEN_SIZE, q_dim); 
 }
