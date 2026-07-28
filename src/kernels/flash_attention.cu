@@ -4,8 +4,8 @@
 #include <float.h>
 
 // block size for tiles 
-#define BLOCK_M 32  // tile rows :: query positions
-#define BLOCK_N 32  // tile cols :: key positions
+#define BLOCK_M 16  // tile rows :: query positions
+#define BLOCK_N 16  // tile cols :: key positions
 
 // flash attention kernel for a single head 
 // Q, K, V: [seq_len, HEAD_DIM], O: [seq_len, HEAD_DIM]
