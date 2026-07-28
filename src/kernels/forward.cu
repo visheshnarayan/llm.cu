@@ -29,7 +29,8 @@ void mlp_forward(
     float* out, float* gate_buf, float* up_buf, int seq_len
 );
 void residual_forward(const float* x, const float* residual, float* out, int n);
-void matmul_forward(const float* A, const float* B, float* C, int M, int N, int K); 
+void matmul_forward(const float* A, const float* B, float* C, int M, int N, int K);
+void matmul_wmma_forward(const float* A, const float* B, float* C, int M, int N, int K); 
 
 // per layer weights (pointers into gpu memory)
 typedef struct {
@@ -142,7 +143,7 @@ void transformer_forward(
     debug_save("data/cuda_out/final_norm.bin", ws->hidden, (size_t)seq_len * HIDDEN_SIZE);
 
     // 4) logits: hidden @ lm_head^T
-    matmul_forward(ws->hidden, model->lm_head, ws->logits, seq_len, VOCAB_SIZE, HIDDEN_SIZE);
+    matmul_wmma_forward(ws->hidden, model->lm_head, ws->logits, seq_len, VOCAB_SIZE, HIDDEN_SIZE);
     debug_save("data/cuda_out/logits.bin", ws->logits, (size_t)seq_len * VOCAB_SIZE);
 }
 
@@ -259,7 +260,7 @@ void transformer_forward_bench(
 
     // logits
     CUDA_CHECK(cudaEventRecord(t0));
-    matmul_forward(ws->hidden, model->lm_head, ws->logits, seq_len, VOCAB_SIZE, HIDDEN_SIZE);
+    matmul_wmma_forward(ws->hidden, model->lm_head, ws->logits, seq_len, VOCAB_SIZE, HIDDEN_SIZE);
     CUDA_CHECK(cudaEventRecord(t1));
     CUDA_CHECK(cudaEventSynchronize(t1));
     CUDA_CHECK(cudaEventElapsedTime(&ms, t0, t1));

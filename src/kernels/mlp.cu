@@ -2,7 +2,7 @@
 #include "config.h"
 
 // forward dec
-void matmul_forward(const float* A, const float* B, float* C, int M, int N, int K);
+void matmul_wmma_forward(const float* A, const float* B, float* C, int M, int N, int K);
 void silu_forward(const float* gate, const float* up, float* out, int n);
 
 void mlp_forward(
@@ -17,13 +17,13 @@ void mlp_forward(
 ) {
     int inter_total = seq_len * INTERMEDIATE_SIZE;
 
-    // gate and up projections
-    matmul_forward(hidden, w_gate, gate_buf, seq_len, INTERMEDIATE_SIZE, HIDDEN_SIZE);
-    matmul_forward(hidden, w_up, up_buf, seq_len, INTERMEDIATE_SIZE, HIDDEN_SIZE);
+    // gate and up projections (tensor cores)
+    matmul_wmma_forward(hidden, w_gate, gate_buf, seq_len, INTERMEDIATE_SIZE, HIDDEN_SIZE);
+    matmul_wmma_forward(hidden, w_up, up_buf, seq_len, INTERMEDIATE_SIZE, HIDDEN_SIZE);
 
-    // fused silu(gate) * up — activation.cu already does this in one kernel
+    // fused silu(gate) * up
     silu_forward(gate_buf, up_buf, gate_buf, inter_total);
 
-    // down projection
-    matmul_forward(gate_buf, w_down, out, seq_len, HIDDEN_SIZE, INTERMEDIATE_SIZE);
+    // down projection (tensor cores)
+    matmul_wmma_forward(gate_buf, w_down, out, seq_len, HIDDEN_SIZE, INTERMEDIATE_SIZE);
 }
