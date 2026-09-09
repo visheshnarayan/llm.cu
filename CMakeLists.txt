@@ -5,7 +5,7 @@ set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CXX_STANDARD 17)
 
 # gpu architecture (sm_80+ required for WMMA tensor cores)
-set(CMAKE_CUDA_ARCHITECTURES 80 86 89 90)
+set(CMAKE_CUDA_ARCHITECTURES 75 80 86 89 90)
 
 # include headers 
 include_directories(${PROJECT_SOURCE_DIR}/include)
@@ -21,11 +21,20 @@ set(KERNEL_SOURCES
     src/kernels/activation.cu
     src/kernels/elementwise.cu
     src/kernels/attention.cu
+    src/kernels/attention_decode.cu
     src/kernels/flash_attention.cu
     src/kernels/mlp.cu
     src/kernels/forward.cu
+    src/kernels/quantize.cu
 )
 
 # main executable
 add_executable(llm_engine src/main.cu ${KERNEL_SOURCES})
 
+# matmul benchmark
+add_executable(bench_matmul
+    benchmarks/bench_matmul.cu
+    src/kernels/matmul.cu
+    src/kernels/matmul_wmma.cu
+    src/kernels/quantize.cu
+)

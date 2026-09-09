@@ -117,5 +117,59 @@ void attention_forward(
     }
 
     // output projection: out[seq, HIDDEN_SIZE] = attn_out[seq, q_dim] @ Wo^T
-    matmul_wmma_forward(attn_out, wo_h, out, seq_len, HIDDEN_SIZE, q_dim); 
+    matmul_wmma_forward(attn_out, wo_h, out, seq_len, HIDDEN_SIZE, q_dim);
+}
+
+void matmul_int8_forward(const float* A, const int8_t* B_q, const float* B_scales, float* C, int M, int N, int K);
+
+void attention_forward_int8(
+    const float* hidden,
+    const int8_t* wq_q, const float* wq_s,
+    const int8_t* wk_q, const float* wk_s,
+    const int8_t* wv_q, const float* wv_s,
+    const int8_t* wo_q, const float* wo_s,
+    const float* q_norm_weight,
+    const float* k_norm_weight,
+    float* out,
+    float* q, float* k, float* v,
+    float* k_exp, float* v_exp,
+    float* attn_out,
+    float* q_head, float* k_head,
+    float* v_head, float* o_head,
+    int seq_len
+) {
+    int q_dim = NUM_HEADS * HEAD_DIM;
+    int kv_dim = NUM_KV_HEADS * HEAD_DIM;
+
+    matmul_int8_forward(hidden, wq_q, wq_s, q, seq_len, q_dim, HIDDEN_SIZE);
+    matmul_int8_forward(hidden, wk_q, wk_s, k, seq_len, kv_dim, HIDDEN_SIZE);
+    matmul_int8_forward(hidden, wv_q, wv_s, v, seq_len, kv_dim, HIDDEN_SIZE);
+
+    rmsnorm_forward(q, q_norm_weight, q, seq_len * NUM_HEADS, HEAD_DIM);
+    rmsnorm_forward(k, k_norm_weight, k, seq_len * NUM_KV_HEADS, HEAD_DIM);
+
+    rope_forward(q, k, seq_len);
+
+    dim3 exp_grid(seq_len, NUM_HEADS);
+    dim3 exp_block(HEAD_DIM);
+    expand_kv_kernel<<<exp_grid, exp_block>>>(k, k_exp, seq_len);
+    CUDA_CHECK_LAST();
+    expand_kv_kernel<<<exp_grid, exp_block>>>(v, v_exp, seq_len);
+    CUDA_CHECK_LAST();
+
+    for (int h = 0; h < NUM_HEADS; h++) {
+        extract_head_kernel<<<seq_len, HEAD_DIM>>>(q, q_head, seq_len, NUM_HEADS, h);
+        CUDA_CHECK_LAST();
+        extract_head_kernel<<<seq_len, HEAD_DIM>>>(k_exp, k_head, seq_len, NUM_HEADS, h);
+        CUDA_CHECK_LAST();
+        extract_head_kernel<<<seq_len, HEAD_DIM>>>(v_exp, v_head, seq_len, NUM_HEADS, h);
+        CUDA_CHECK_LAST();
+
+        flash_attention_forward(q_head, k_head, v_head, o_head, seq_len);
+
+        scatter_head_kernel<<<seq_len, HEAD_DIM>>>(o_head, attn_out, seq_len, NUM_HEADS, h);
+        CUDA_CHECK_LAST();
+    }
+
+    matmul_int8_forward(attn_out, wo_q, wo_s, out, seq_len, HIDDEN_SIZE, q_dim);
 }
