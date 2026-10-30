@@ -1,6 +1,6 @@
 # llm.cu
 
-A from-scratch CUDA inference and LoRA fine-tuning engine for **Qwen3 1.7B**. No cuBLAS. No cuDNN. Every kernel written by hand in raw CUDA C++.
+A from-scratch CUDA inference and LoRA fine-tuning engine for **Qwen3 1.7B** with every kernel written by hand in CUDA.
 
 Benchmarked on **RTX A5000** (24 GB, sm_86, CUDA 12.6.3).
 
