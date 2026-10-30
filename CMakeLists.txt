@@ -38,3 +38,19 @@ add_executable(bench_matmul
     src/kernels/matmul_wmma.cu
     src/kernels/quantize.cu
 )
+
+# LoRA fine-tuning trainer (M6)
+set(LORA_SOURCES
+    src/kernels/embed.cu
+    src/kernels/matmul.cu
+    src/kernels/rmsnorm.cu
+    src/kernels/rope.cu
+    src/kernels/activation.cu
+    src/kernels/elementwise.cu
+    src/kernels/lora.cu
+    src/kernels/loss.cu
+    src/kernels/lora_forward.cu
+    src/kernels/lora_backward.cu
+)
+add_executable(llm_train src/train.cu ${LORA_SOURCES})
+target_link_libraries(llm_train curand)

@@ -65,4 +65,14 @@ if [ "$MODE" = "bench-int8" ] || [ "$MODE" = "all" ]; then
     ./build/llm_engine --int8 --generate --max-tokens 20
 fi
 
+if [ "$MODE" = "train" ] || [ "$MODE" = "all" ]; then
+    echo "=== LoRA fine-tuning (M6) ==="
+    # tokenize training data if provided
+    if [ -f "data/train.txt" ]; then
+        python python/tokenize_input.py --train data/train.txt
+    fi
+    ./build/llm_train --lr 3e-4 --steps 200 --seq-len 256 --save-every 100 --log-every 10
+    python python/save_lora.py --list --step 200
+fi
+
 echo "=== done ==="

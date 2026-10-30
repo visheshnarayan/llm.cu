@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 
 // wrap every cuda api call with this to catch error instead of corrupting future ops
 #define CUDA_CHECK(err) do { \
