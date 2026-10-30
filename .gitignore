@@ -9,6 +9,7 @@ build/
 weights/
 models/
 data/
+!data/train.txt
 *.bin
 *.safetensors
 *.gguf
